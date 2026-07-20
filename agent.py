@@ -73,6 +73,13 @@ except ImportError:
     sys.exit(1)
 
 try:
+    from tavily import TavilyClient
+
+    _TAVILY_AVAILABLE = True
+except ImportError:
+    _TAVILY_AVAILABLE = False
+
+try:
     from PIL import Image as PILImage
 except ImportError:
     print("Missing dependency. Run:  pip install pillow")
@@ -194,6 +201,26 @@ if "comfyui" in _cfg:
     _workspace = _cfg["comfyui"].get("workspace", "")
     _comfy_models_dir = Path(_workspace) / "models" if _workspace else None
     init_comfy(_comfy_models_dir)
+
+# ── Search provider config ────────────────────────────────────────────────────
+
+_TAVILY_API_KEY = (
+    _cfg["search"].get("TAVILY_API_KEY", "").strip()
+    if "search" in _cfg
+    else ""
+) or os.getenv("TAVILY_API_KEY", "")
+
+_SEARCH_PROVIDER = (
+    _cfg["search"].get("provider", "auto").strip().lower()
+    if "search" in _cfg
+    else "auto"
+)
+
+_tavily_client: "TavilyClient | None" = None
+if _TAVILY_AVAILABLE and _TAVILY_API_KEY and _SEARCH_PROVIDER != "duckduckgo":
+    _tavily_client = TavilyClient(api_key=_TAVILY_API_KEY)
+
+_USE_TAVILY = _tavily_client is not None and _SEARCH_PROVIDER != "duckduckgo"
 
 
 # ── Process handles (set by lifespan if managed=true) ─────────────────────────
@@ -431,9 +458,25 @@ def _ddgs_search(query: str, max_results: int) -> list[dict]:
         return list(ddgs.text(query, max_results=max_results))
 
 
+def _tavily_search(query: str, max_results: int) -> list[dict]:
+    """Synchronous Tavily search — run via asyncio.to_thread."""
+    assert _tavily_client is not None
+    response = _tavily_client.search(query=query, max_results=max_results)
+    return [
+        {
+            "title": r.get("title", ""),
+            "url": r.get("url", ""),
+            "snippet": r.get("content", ""),
+        }
+        for r in response.get("results", [])
+    ]
+
+
 async def exec_web_search(query: str, max_results: int = 10) -> str:
     """
-    Search DuckDuckGo and return JSON results.
+    Search the web and return JSON results.
+
+    Uses Tavily when TAVILY_API_KEY is set, otherwise falls back to DuckDuckGo.
 
     Args:
         query: Search query string.
@@ -443,15 +486,20 @@ async def exec_web_search(query: str, max_results: int = 10) -> str:
         JSON string of results or an error string.
     """
     try:
-        raw = await asyncio.to_thread(_ddgs_search, query, max_results)
-        results = [
-            {
-                "title": r.get("title", ""),
-                "url": r.get("href", ""),
-                "snippet": r.get("body", ""),
-            }
-            for r in raw
-        ]
+        if _USE_TAVILY:
+            results = await asyncio.to_thread(
+                _tavily_search, query, max_results
+            )
+        else:
+            raw = await asyncio.to_thread(_ddgs_search, query, max_results)
+            results = [
+                {
+                    "title": r.get("title", ""),
+                    "url": r.get("href", ""),
+                    "snippet": r.get("body", ""),
+                }
+                for r in raw
+            ]
         return (
             json.dumps(results, ensure_ascii=False, indent=2)
             if results

@@ -53,3 +53,13 @@ managed = true
 [huggingface]
 ; Hugging Face token for gated model downloads (leave empty if none needed)
 token =
+
+[search]
+; Search provider: auto | duckduckgo | tavily
+; "auto" uses Tavily when TAVILY_API_KEY is available, otherwise DuckDuckGo.
+; "duckduckgo" forces DuckDuckGo even when a Tavily key is present.
+provider = auto
+; Tavily API key (optional — get one free at https://app.tavily.com)
+; Can also be set via TAVILY_API_KEY environment variable.
+; The env var takes effect if this field is left blank.
+TAVILY_API_KEY =
