@@ -75,11 +75,9 @@ except ImportError:
 try:
     from tavily import TavilyClient
 
-    _TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
-    _TAVILY_AVAILABLE = bool(_TAVILY_API_KEY)
+    _TAVILY_AVAILABLE = True
 except ImportError:
     _TAVILY_AVAILABLE = False
-    _TAVILY_API_KEY = ""
 
 try:
     from PIL import Image as PILImage
@@ -203,6 +201,26 @@ if "comfyui" in _cfg:
     _workspace = _cfg["comfyui"].get("workspace", "")
     _comfy_models_dir = Path(_workspace) / "models" if _workspace else None
     init_comfy(_comfy_models_dir)
+
+# ── Search provider config ────────────────────────────────────────────────────
+
+_TAVILY_API_KEY = (
+    _cfg["search"].get("TAVILY_API_KEY", "").strip()
+    if "search" in _cfg
+    else ""
+) or os.getenv("TAVILY_API_KEY", "")
+
+_SEARCH_PROVIDER = (
+    _cfg["search"].get("provider", "auto").strip().lower()
+    if "search" in _cfg
+    else "auto"
+)
+
+_tavily_client: "TavilyClient | None" = None
+if _TAVILY_AVAILABLE and _TAVILY_API_KEY and _SEARCH_PROVIDER != "duckduckgo":
+    _tavily_client = TavilyClient(api_key=_TAVILY_API_KEY)
+
+_USE_TAVILY = _tavily_client is not None and _SEARCH_PROVIDER != "duckduckgo"
 
 
 # ── Process handles (set by lifespan if managed=true) ─────────────────────────
@@ -442,8 +460,8 @@ def _ddgs_search(query: str, max_results: int) -> list[dict]:
 
 def _tavily_search(query: str, max_results: int) -> list[dict]:
     """Synchronous Tavily search — run via asyncio.to_thread."""
-    client = TavilyClient(api_key=_TAVILY_API_KEY)
-    response = client.search(query=query, max_results=max_results)
+    assert _tavily_client is not None
+    response = _tavily_client.search(query=query, max_results=max_results)
     return [
         {
             "title": r.get("title", ""),
@@ -468,7 +486,7 @@ async def exec_web_search(query: str, max_results: int = 10) -> str:
         JSON string of results or an error string.
     """
     try:
-        if _TAVILY_AVAILABLE:
+        if _USE_TAVILY:
             results = await asyncio.to_thread(
                 _tavily_search, query, max_results
             )
