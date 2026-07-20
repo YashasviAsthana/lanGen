@@ -73,6 +73,15 @@ except ImportError:
     sys.exit(1)
 
 try:
+    from tavily import TavilyClient
+
+    _TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
+    _TAVILY_AVAILABLE = bool(_TAVILY_API_KEY)
+except ImportError:
+    _TAVILY_AVAILABLE = False
+    _TAVILY_API_KEY = ""
+
+try:
     from PIL import Image as PILImage
 except ImportError:
     print("Missing dependency. Run:  pip install pillow")
@@ -431,9 +440,25 @@ def _ddgs_search(query: str, max_results: int) -> list[dict]:
         return list(ddgs.text(query, max_results=max_results))
 
 
+def _tavily_search(query: str, max_results: int) -> list[dict]:
+    """Synchronous Tavily search — run via asyncio.to_thread."""
+    client = TavilyClient(api_key=_TAVILY_API_KEY)
+    response = client.search(query=query, max_results=max_results)
+    return [
+        {
+            "title": r.get("title", ""),
+            "url": r.get("url", ""),
+            "snippet": r.get("content", ""),
+        }
+        for r in response.get("results", [])
+    ]
+
+
 async def exec_web_search(query: str, max_results: int = 10) -> str:
     """
-    Search DuckDuckGo and return JSON results.
+    Search the web and return JSON results.
+
+    Uses Tavily when TAVILY_API_KEY is set, otherwise falls back to DuckDuckGo.
 
     Args:
         query: Search query string.
@@ -443,15 +468,20 @@ async def exec_web_search(query: str, max_results: int = 10) -> str:
         JSON string of results or an error string.
     """
     try:
-        raw = await asyncio.to_thread(_ddgs_search, query, max_results)
-        results = [
-            {
-                "title": r.get("title", ""),
-                "url": r.get("href", ""),
-                "snippet": r.get("body", ""),
-            }
-            for r in raw
-        ]
+        if _TAVILY_AVAILABLE:
+            results = await asyncio.to_thread(
+                _tavily_search, query, max_results
+            )
+        else:
+            raw = await asyncio.to_thread(_ddgs_search, query, max_results)
+            results = [
+                {
+                    "title": r.get("title", ""),
+                    "url": r.get("href", ""),
+                    "snippet": r.get("body", ""),
+                }
+                for r in raw
+            ]
         return (
             json.dumps(results, ensure_ascii=False, indent=2)
             if results
