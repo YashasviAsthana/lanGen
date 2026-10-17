@@ -606,6 +606,8 @@ def _write_config(
     comfy_port: str = "7860",
 ) -> None:
     cfg = configparser.ConfigParser()
+    # Preserve hand-edited sections such as the selected search provider.
+    cfg.read(CONFIG_FILE)
     cfg["llama"] = {
         "binary": str(llama_bin),
         "model": str(model_path),

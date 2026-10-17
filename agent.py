@@ -393,6 +393,7 @@ def get_system_prompt(registry: dict) -> str:
     CONTEXT BUDGET:
     Each fetch_page result is capped at ~6000 characters. You can fetch up to ~20 pages
     before your context fills up. Prioritise quality over quantity.
+    Results may be excerpts rather than full pages. Do not assume missing details are absent from the source.
     If a page returns an error or irrelevant content, discard it and move on.
 
     WHEN NOT TO USE DEEP RESEARCH:
@@ -425,15 +426,29 @@ _PARALLEL_TOOLS = {"web_search", "fetch_page"}
 _SESSION_RESEARCH_BUDGET = 80_000  # ~20k tokens of tool results per turn
 
 
+def _search_provider() -> str:
+    provider = _cfg.get("search", "provider", fallback="duckduckgo").strip().lower()
+    if provider not in {"duckduckgo", "parallel", "disabled"}:
+        raise ValueError(f"Unknown search provider: {provider}")
+    return provider
+
+
 def _ddgs_search(query: str, max_results: int) -> list[dict]:
     """Synchronous DuckDuckGo search — run via asyncio.to_thread."""
     with DDGS() as ddgs:
         return list(ddgs.text(query, max_results=max_results))
 
 
-async def exec_web_search(query: str, max_results: int = 10) -> str:
+async def exec_web_search(
+    query: str,
+    max_results: int = 10,
+    *,
+    session_id: str = "",
+    model: str = "",
+    cancelled: asyncio.Event | None = None,
+) -> str:
     """
-    Search DuckDuckGo and return JSON results.
+    Search with the configured provider and return normalized JSON results.
 
     Args:
         query: Search query string.
@@ -443,15 +458,32 @@ async def exec_web_search(query: str, max_results: int = 10) -> str:
         JSON string of results or an error string.
     """
     try:
-        raw = await asyncio.to_thread(_ddgs_search, query, max_results)
-        results = [
-            {
-                "title": r.get("title", ""),
-                "url": r.get("href", ""),
-                "snippet": r.get("body", ""),
-            }
-            for r in raw
-        ]
+        provider = _search_provider()
+        if provider == "disabled":
+            return "Search is disabled in lanGen.ini."
+        if not isinstance(query, str) or not query.strip():
+            return "Search error: query must not be empty."
+        max_results = max(1, min(10, int(max_results)))
+        if provider == "parallel":
+            import parallel_search
+
+            results = await parallel_search.search(
+                query,
+                max_results,
+                session_id=session_id,
+                model=model,
+                cancelled=cancelled,
+            )
+        else:
+            raw = await asyncio.to_thread(_ddgs_search, query, max_results)
+            results = [
+                {
+                    "title": r.get("title", ""),
+                    "url": r.get("href", ""),
+                    "snippet": r.get("body", ""),
+                }
+                for r in raw
+            ]
         return (
             json.dumps(results, ensure_ascii=False, indent=2)
             if results
@@ -461,7 +493,14 @@ async def exec_web_search(query: str, max_results: int = 10) -> str:
         return f"Search error: {e}"
 
 
-async def fetch_page(url: str, http: httpx.AsyncClient) -> str:
+async def fetch_page(
+    url: str,
+    http: httpx.AsyncClient,
+    *,
+    session_id: str = "",
+    model: str = "",
+    cancelled: asyncio.Event | None = None,
+) -> str:
     """
     Fetch a URL and extract its main text content.
 
@@ -472,6 +511,25 @@ async def fetch_page(url: str, http: httpx.AsyncClient) -> str:
     Returns:
         Extracted plain text capped at _FETCH_MAX_CHARS, or an error string.
     """
+    try:
+        provider = _search_provider()
+        if provider == "disabled":
+            return "Page fetching is disabled in lanGen.ini."
+        if provider == "parallel":
+            import parallel_search
+
+            async with _FETCH_SEMAPHORE:
+                parallel_text = await parallel_search.fetch(
+                    url, session_id=session_id, model=model, cancelled=cancelled
+                )
+            if len(parallel_text) > _FETCH_MAX_CHARS:
+                parallel_text = (
+                    parallel_text[:_FETCH_MAX_CHARS] + "\n\n[Content truncated]"
+                )
+            return f"Source: {url}\n{'=' * 40}\n{parallel_text}"
+    except Exception as e:
+        return f"Error: {e}"
+
     async with _FETCH_SEMAPHORE:
         try:
             resp = await http.get(
@@ -813,9 +871,9 @@ async def _download_comfy_output(
 
 async def agent_stream(
     messages: list[dict[str, Any]],
-    attachment=None,
+    attachment: Any = None,
     registry: dict[str, Any] | None = None,
-    tools: list[str] | None = None,
+    tools: list[dict[str, Any]] | None = None,
     last_image: str = "",
     last_image_url: str = "",
     models_dir: Path | None = None,
@@ -836,6 +894,8 @@ async def agent_stream(
     in-flight HTTP request to llama.cpp immediately.
     """
     history = list(messages)
+    search_session_id = session_id or str(uuid.uuid4())
+    allowed_tools = {tool["function"]["name"] for tool in tools or []}
 
     async with httpx.AsyncClient(timeout=720) as client:
         has_fetch_results = False
@@ -953,12 +1013,24 @@ async def agent_stream(
                 ) -> tuple[str, str]:
                     name = tc["function"]["name"]
                     args = json.loads(tc["function"]["arguments"] or "{}")
+                    if name not in allowed_tools:
+                        return tc["id"], f"Tool is not enabled: {name}"
                     if name == "web_search":
                         result = await exec_web_search(
-                            args.get("query", ""), args.get("max_results", 10)
+                            args.get("query", ""),
+                            args.get("max_results", 10),
+                            session_id=search_session_id,
+                            model=model,
+                            cancelled=cancelled,
                         )
                     elif name == "fetch_page":
-                        result = await fetch_page(args.get("url", ""), fetch_http)
+                        result = await fetch_page(
+                            args.get("url", ""),
+                            fetch_http,
+                            session_id=search_session_id,
+                            model=model,
+                            cancelled=cancelled,
+                        )
                     else:
                         result = f"Unknown parallel tool: {name}"
                     return tc["id"], result

@@ -284,9 +284,11 @@ def build_tools_from_workflows(registry: dict, object_info: dict | None = None) 
             "function": {
                 "name": "fetch_page",
                 "description": (
-                    "Fetch and read the full text content of a web page. "
-                    "Use this after web_search to read promising URLs in full. "
-                    "Returns extracted main text (up to ~6000 characters). "
+                    "Fetch extracted text from a web page. "
+                    "Use this after web_search to read promising URLs. "
+                    "Returns main text or page excerpts, depending on the search "
+                    "provider (up to ~6000 characters). "
+                    "The result may not cover the entire page. "
                     "Do not use for PDFs, images, or binary file downloads."
                 ),
                 "parameters": {

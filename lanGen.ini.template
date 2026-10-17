@@ -53,3 +53,9 @@ managed = true
 [huggingface]
 ; Hugging Face token for gated model downloads (leave empty if none needed)
 token =
+
+[search]
+; duckduckgo (default), parallel (hosted Search MCP), or disabled (no search/fetch)
+; Parallel sends queries and requested URLs to https://search.parallel.ai/mcp.
+; It needs no account or API key. Restart agent.py after changing this setting.
+provider = duckduckgo

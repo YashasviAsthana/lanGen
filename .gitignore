@@ -1,7 +1,7 @@
 CLAUDE.md
 /certs
 /.claude
-/__pycache__
+__pycache__/
 /chats
 /static/generated
 /logs

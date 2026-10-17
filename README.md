@@ -1,6 +1,6 @@
 # lanGen - Personal LAN AI Agent
 
-A self-hosted chat agent that runs entirely on your local network. Run it on one machine, then open `https://<your-ip>:7000` from any device on your LAN - phone, laptop, tablet - and get a full AI assistant backed by a local LLM, web search, image generation, image editing, and image-to-video. No cloud, no API keys, no data leaves your network.
+A self-hosted chat agent that runs on your local network. Run it on one machine, then open `https://<your-ip>:7000` from any device on your LAN - phone, laptop, tablet - and get a full AI assistant backed by a local LLM, web search, image generation, image editing, and image-to-video. Chat inference and storage stay local, with no model API keys required. Web search and page fetching use the internet.
 
 ---
 
@@ -197,6 +197,30 @@ managed      = true
 token        =                            ; only needed for gated repos
 ```
 
+### Optional Parallel search and page fetching
+
+DuckDuckGo remains the default, with pages fetched directly by lanGen. To use
+[Parallel Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp), add
+this section to `lanGen.ini` and restart `agent.py`:
+
+```ini
+[search]
+provider = parallel
+```
+
+The existing `web_search` and `fetch_page` tools then use Parallel's hosted MCP
+service at `https://search.parallel.ai/mcp`. Search runs in Fast mode, with no
+account or API key required. This option sends search queries, requested URLs,
+conversation identifiers, and the active model name to Parallel; inference and
+chat storage stay local. Anonymous usage has service limits, and provider errors are returned to the
+agent without switching to another backend. Page excerpts retain the existing
+6,000-character content cap and source URLs.
+
+Use `provider = duckduckgo` to restore direct search and page fetching, or
+`provider = disabled` to prevent both research tools from making requests.
+Omitting the section also selects DuckDuckGo. Re-running `setup.py` preserves the
+search section.
+
 ---
 
 ## Development
@@ -206,6 +230,7 @@ uv sync                       # install deps
 uv run ruff format .          # format
 uv run ruff check .           # lint
 uv run mypy agent.py comfy.py # type-check
+uv run python -m unittest discover -s tests # research provider and agent-loop tests
 ```
 
 ---
